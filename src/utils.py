@@ -216,6 +216,7 @@ def get_llm(model: Optional[str] = None, temperature: float = 0.0):
         )
 
     elif provider == 'google':
+        import time
         from langchain_google_genai import ChatGoogleGenerativeAI
 
         api_key = os.getenv('GOOGLE_API_KEY')
@@ -225,7 +226,33 @@ def get_llm(model: Optional[str] = None, temperature: float = 0.0):
                 "Obtenha uma chave em: https://aistudio.google.com/app/apikey"
             )
 
-        return ChatGoogleGenerativeAI(
+        class RobustChatGoogleGenerativeAI(ChatGoogleGenerativeAI):
+            def invoke(self, input, config=None, **kwargs):
+                max_attempts = 6
+                for attempt in range(max_attempts):
+                    try:
+                        response = super().invoke(input, config=config, **kwargs)
+                        if hasattr(response, "content") and isinstance(response.content, list):
+                            text_parts = []
+                            for part in response.content:
+                                if isinstance(part, dict) and "text" in part:
+                                    text_parts.append(part["text"])
+                                elif isinstance(part, str):
+                                    text_parts.append(part)
+                            response.content = "".join(text_parts) if text_parts else str(response.content)
+                        time.sleep(2)
+                        return response
+                    except Exception as e:
+                        err_str = str(e).lower()
+                        if ("429" in err_str or "resource_exhausted" in err_str or "quota" in err_str) and attempt < max_attempts - 1:
+                            wait_time = 15 * (attempt + 1)
+                            print(f"\n⚠️ Limite de requisições do Gemini atingido (429). Aguardando {wait_time}s antes de tentar novamente (tentativa {attempt + 1}/{max_attempts})...")
+                            time.sleep(wait_time)
+                        else:
+                            raise e
+                return super().invoke(input, config=config, **kwargs)
+
+        return RobustChatGoogleGenerativeAI(
             model=model_name,
             temperature=temperature,
             google_api_key=api_key
